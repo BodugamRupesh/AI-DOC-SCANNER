@@ -1,16 +1,42 @@
 import os
 from typing import List, Dict, Tuple
-from groq import Groq
+from openai import OpenAI
 
 
 class RAGPipeline:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.client = Groq(api_key=self.api_key)
+        # Detect which API key is present in environment
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        groq_key = os.getenv("GROQ_API_KEY")
+        
+        if gemini_key:
+            self.provider = "gemini"
+            self.client = OpenAI(
+                api_key=gemini_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/"
+            )
+            self.model = "gemini-2.5-flash"
+        elif openai_key:
+            self.provider = "openai"
+            self.client = OpenAI(api_key=openai_key)
+            self.model = "gpt-4o-mini"
+        elif groq_key:
+            self.provider = "groq"
+            self.client = OpenAI(
+                api_key=groq_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            self.model = "llama-3.3-70b-versatile"
+        else:
+            raise ValueError(
+                "No LLM API key found. Please set GEMINI_API_KEY, "
+                "OPENAI_API_KEY, or GROQ_API_KEY in your environment."
+            )
     
     def generate_answer(self, question: str, context: str) -> str:
         """
-        Generate answer using Groq with context
+        Generate answer using the selected LLM provider with context
         
         Args:
             question: User question
@@ -32,7 +58,7 @@ Question: {question}
 Please provide a comprehensive answer based on the context above."""
         
         response = self.client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}

@@ -1,20 +1,57 @@
+import os
 import json
 from pathlib import Path
 from typing import List, Dict
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 from app.utils import ensure_vector_db_dir, chunk_text
 import numpy as np
 
 
 class SimpleVectorStore:
-    """Simple in-memory vector store without chromadb (works with Python 3.14)"""
+    """Simple in-memory vector store using cloud embeddings (works with Python 3.14)"""
     
     def __init__(self):
         ensure_vector_db_dir()
-        self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
         self.stores = {}  # doc_id -> {embeddings, documents, metadata}
         self.db_path = Path("./data/vector_db")
+        
+        # Detect active API key
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        groq_key = os.getenv("GROQ_API_KEY")
+        
+        if gemini_key:
+            self.client = OpenAI(
+                api_key=gemini_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/"
+            )
+            self.model = "text-embedding-004"
+        elif openai_key:
+            self.client = OpenAI(api_key=openai_key)
+            self.model = "text-embedding-3-small"
+        elif groq_key:
+            self.client = OpenAI(
+                api_key=groq_key,
+                base_url="https://api.groq.com/openai/v1"
+            )
+            self.model = "nomic-embed-text"
+        else:
+            raise ValueError(
+                "No API key found for vector store. Please set GEMINI_API_KEY, "
+                "OPENAI_API_KEY, or GROQ_API_KEY in your environment."
+            )
     
+    def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Get embeddings for a list of texts using the configured API client"""
+        try:
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=texts
+            )
+            return [data.embedding for data in response.data]
+        except Exception as e:
+            raise ValueError(f"Failed to generate embeddings via API: {str(e)}")
+            
     def get_or_create_collection(self, doc_id: str):
         """Get or create a collection for a document"""
         if doc_id not in self.stores:
@@ -23,6 +60,8 @@ class SimpleVectorStore:
                 "documents": [],
                 "metadata": []
             }
+            # Try to load existing data if present
+            self._load_from_disk(doc_id)
         return doc_id
     
     def add_documents(self, doc_id: str, text: str, filename: str, pages_text: Dict[int, str]):
@@ -33,7 +72,7 @@ class SimpleVectorStore:
         
         # Create chunks with page tracking
         chunks = chunk_text(text, chunk_size=500, overlap=50)
-        embeddings = self.embedder.encode(chunks)
+        embeddings = self._get_embeddings(chunks)
         
         # Try to map chunks to pages (approximate)
         metadatas = []
@@ -77,7 +116,7 @@ class SimpleVectorStore:
             return []
         
         # Encode query
-        query_embedding = self.embedder.encode([query])[0]
+        query_embedding = self._get_embeddings([query])[0]
         
         # Calculate similarities (cosine)
         embeddings = store["embeddings"]
